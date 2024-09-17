@@ -4,8 +4,8 @@
 bool MeggittData::createAllProducers() {
 	bool retval = true;
 	
-	m_producerMdfChangeRequest = std::make_shared<ProducerObject<MdfChangeRequest>>("MDF_CHANGE_REQUEST");
-	if (m_producerMdfChangeRequest != nullptr) { if (!m_producerMdfChangeRequest->create()) { retval = false; } }
+	m_producerMdfChangeRequest = std::make_shared<ProducerObject<MdfChangeRequest>>("FEWS_MEMORY", "MDF_CHANGE_REQUEST");
+	if (m_producerMdfChangeRequest != nullptr) { /*if (!m_producerMdfChangeRequest->create()) { retval = false; }*/ }
 	else { retval = false; }
 
 	if (retval == false) {
@@ -19,7 +19,7 @@ bool MeggittData::createAllProducers() {
 bool MeggittData::createAllConsumers() {
 	bool retval = true;
 
-	m_consumerMdfChange = std::make_shared<ConsumerObject<MdfChange, MdfChangeCallback>>("MDF_CHANGE");
+	m_consumerMdfChange = std::make_shared<ConsumerObject<MdfChange, MdfChangeCallback>>("FEWS_MEMORY", "MDF_CHANGE");
 	if (m_consumerMdfChange != nullptr) {
 		if (m_consumerMdfChange->open()) {
 			MdfChangeCallback func = [](MdfChange mdfChange) { MeggittData::getInstance().callbackMdfChange(mdfChange); };

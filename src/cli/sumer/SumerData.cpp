@@ -4,8 +4,8 @@
 bool SumerData::createAllProducers() {
 	bool retval = true;
 
-	m_producerMdfChange = std::make_shared<ProducerObject<MdfChange>>("MDF_CHANGE");
-	if (m_producerMdfChange != nullptr) { if (!m_producerMdfChange->create()) { retval = false; } }
+	m_producerMdfChange = std::make_shared<ProducerObject<MdfChange>>("FEWS_MEMORY", "MDF_CHANGE");
+	if (m_producerMdfChange != nullptr) { /*if (!m_producerMdfChange->create()) { retval = false; }*/ }
 	else { retval = false; }
 
 	if (retval == false) {
@@ -19,7 +19,7 @@ bool SumerData::createAllProducers() {
 bool SumerData::createAllConsumers() {
 	bool retval = true;
 
-	m_consumerMdfChangeRequest = std::make_shared<ConsumerObject<MdfChangeRequest, MdfChangeRequestCallback>>("MDF_CHANGE_REQUEST");
+	m_consumerMdfChangeRequest = std::make_shared<ConsumerObject<MdfChangeRequest, MdfChangeRequestCallback>>("FEWS_MEMORY", "MDF_CHANGE_REQUEST");
 	if (m_consumerMdfChangeRequest != nullptr) { 
 		if (m_consumerMdfChangeRequest->open()) {
 			MdfChangeRequestCallback func = [](MdfChangeRequest request) { SumerData::getInstance().callbackMdfChangeRequest(request); };

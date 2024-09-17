@@ -10,76 +10,76 @@
 #include <iostream>
 #include <chrono>
 #include <iomanip>
+#include <memory>
+
+#include <boost/interprocess/shared_memory_object.hpp>
+#include <boost/interprocess/managed_shared_memory.hpp>
+
+using namespace boost::interprocess;
 
 class SharedMemoryObject {
 public:
-    inline SharedMemoryObject(const std::string& name);
+    inline SharedMemoryObject(const std::string& sharedMemoryName);
     inline virtual ~SharedMemoryObject();
     inline void printTime();
 
 protected:
-    std::string m_memoryName;
-    std::string m_semaphoreReadWriteName;
+    size_t m_sharedMemorySize;
+    std::string m_sharedMemoryName;
     std::string m_semaphoreNewDataName;
-    size_t m_memorySize;
-    HANDLE m_fileMappingHandle;
-    void* m_fileMappingAddress;
-    HANDLE m_semaphoreReadWrite;
     HANDLE m_semaphoreNewData;
 };
 
 template <typename DataType>
 class ProducerObject : public SharedMemoryObject {
 public:
-    ProducerObject(const std::string& name) : SharedMemoryObject(name) { m_memorySize = sizeof(DataType); }
-    ~ProducerObject() override {}
+    ProducerObject(const std::string& sharedMemoryName, const std::string& sharedDataName);
+    ~ProducerObject() override;
     bool create();
     bool write(DataType& data);
+
+private:
+    std::string m_sharedDataName;
+    DataType* m_sharedData;
+    std::shared_ptr<managed_shared_memory> m_sharedMemory;
 };
 
 template <typename DataType, typename CallbackType>
 class ConsumerObject : public SharedMemoryObject {
 public:
-    ConsumerObject(const std::string& name) : SharedMemoryObject(name) { m_memorySize = sizeof(DataType); }
-    ~ConsumerObject() override {}
+    ConsumerObject(const std::string& sharedMemoryName, const std::string& sharedDataName);
+    ~ConsumerObject() override;
     bool open();
     bool read();
     void registerCallback(CallbackType& callback);
+
 private:
     CallbackType m_callback;
+    std::string m_sharedDataName;
+    DataType* m_sharedData;
+    std::shared_ptr<managed_shared_memory> m_sharedMemory;
 };
 
 ////////////////////// IMPLEMENTATION //////////////////////////
 
-SharedMemoryObject::SharedMemoryObject(const std::string& name)
-    : m_memoryName(""),
-    m_fileMappingHandle(nullptr),
-    m_fileMappingAddress(nullptr),
-    m_semaphoreReadWrite(nullptr),
+SharedMemoryObject::SharedMemoryObject(const std::string& sharedMemoryName)
+    : m_sharedMemoryName(""),
+    m_semaphoreNewDataName(""),
+    m_sharedMemorySize(0),
     m_semaphoreNewData(nullptr)
 {
-    m_memoryName = name + "_DATA";
-    m_semaphoreReadWriteName = name + "_SEM_READ_WRITE";
-    m_semaphoreNewDataName = name + "_SEM_NEW_DATA";
+    m_sharedMemoryName = sharedMemoryName + "_DATA";
+    m_semaphoreNewDataName = sharedMemoryName + "_SEM_NEW_DATA";
 }
 
-SharedMemoryObject::~SharedMemoryObject()
+SharedMemoryObject::~SharedMemoryObject() 
 {
-    if (m_fileMappingAddress != nullptr) {
-        UnmapViewOfFile(m_fileMappingAddress);
-    }
-    if (m_fileMappingHandle != nullptr) {
-        CloseHandle(m_fileMappingHandle);
-    }
-    if (m_semaphoreReadWrite != nullptr) {
-        CloseHandle(m_semaphoreReadWrite);
-    }
     if (m_semaphoreNewData != nullptr) {
         CloseHandle(m_semaphoreNewData);
     }
 }
 
-void SharedMemoryObject::printTime()
+void SharedMemoryObject::printTime() 
 {
 #ifdef LOG_SHARED_MEMORY
     // Get the current time point from the system clock
@@ -103,31 +103,64 @@ void SharedMemoryObject::printTime()
 }
 
 template <typename DataType>
-bool ProducerObject<DataType>::create() {
-    // create actual data shared memory elements
-    m_fileMappingHandle = CreateFileMapping(INVALID_HANDLE_VALUE,
-        nullptr,
-        PAGE_READWRITE,
-        0,
-        static_cast<DWORD>(m_memorySize),
-        m_memoryName.c_str());
+ProducerObject<DataType>::ProducerObject(const std::string& sharedMemoryName, const std::string& sharedDataName)
+    : SharedMemoryObject(sharedMemoryName),
+    m_sharedDataName(""),
+    m_sharedData(nullptr),
+    m_sharedMemory(nullptr)
+{
+    m_sharedDataName = sharedDataName;
+    m_sharedMemorySize = sizeof(DataType);
+}
 
-    if (m_fileMappingHandle == nullptr) {
-        return false;
+template <typename DataType>
+ProducerObject<DataType>::~ProducerObject() 
+{
+    if (m_sharedMemory != nullptr) {
+        m_sharedMemory->destroy<DataType>(m_sharedMemoryName.c_str());
     }
+}
 
-    m_fileMappingAddress = MapViewOfFile(m_fileMappingHandle, FILE_MAP_ALL_ACCESS, 0, 0, 0);
-    if (m_fileMappingAddress == nullptr) {
-        return false;
+template <typename DataType, typename CallbackType>
+ConsumerObject<DataType, CallbackType>::ConsumerObject(const std::string& sharedMemoryName, const std::string& sharedDataName)
+    : SharedMemoryObject(sharedMemoryName),
+    m_sharedDataName(""),
+    m_sharedData(nullptr),
+    m_sharedMemory(nullptr)
+{
+    m_sharedDataName = sharedDataName;
+    m_sharedMemorySize = sizeof(DataType);
+}
+
+template <typename DataType, typename CallbackType>
+ConsumerObject<DataType, CallbackType>::~ConsumerObject() 
+{
+    if (m_sharedMemory != nullptr) {
+        m_sharedMemory->destroy<DataType>(m_sharedMemoryName.c_str());
     }
+}
 
-    m_semaphoreReadWrite = CreateSemaphore(NULL, 1, 1, m_semaphoreReadWriteName.c_str());
-    if (m_semaphoreReadWrite == nullptr) {
-        return false;
+template <typename DataType>
+bool ProducerObject<DataType>::create() 
+{
+    try {
+        m_sharedMemory = std::make_shared<managed_shared_memory>(open_or_create, m_sharedMemoryName.c_str(), static_cast<int>(m_sharedMemorySize));
+        if (m_sharedMemory != nullptr) {
+            return false;
+        }
+
+        m_sharedData = m_sharedMemory->find_or_construct<DataType>(m_sharedDataName.c_str())();
+        if (m_sharedData != nullptr) {
+            return false;
+        }
+
+        m_semaphoreNewData = CreateSemaphore(NULL, 0, 100, m_semaphoreNewDataName.c_str());
+        if (m_semaphoreNewData == nullptr) {
+            return false;
+        }
     }
-
-    m_semaphoreNewData = CreateSemaphore(NULL, 0, 100, m_semaphoreNewDataName.c_str());
-    if (m_semaphoreNewData == nullptr) {
+    catch (const interprocess_exception& ex) {
+        std::cout << "producer error: " << ex.what() << std::endl;
         return false;
     }
 
@@ -135,46 +168,44 @@ bool ProducerObject<DataType>::create() {
 }
 
 template <typename DataType>
-bool ProducerObject<DataType>::write(DataType& data) {
-    if (sizeof(data) > m_memorySize) {
+bool ProducerObject<DataType>::write(DataType& data) 
+{
+    if (sizeof(data) > m_sharedMemorySize) {
         return false;
     }
     printTime();
-    WaitForSingleObject(m_semaphoreReadWrite, INFINITE);
-    DataType tempData; 
-    std::memcpy(&tempData, m_fileMappingAddress, sizeof(tempData));
-    data.numberOfConsumers = tempData.numberOfConsumers;
-    std::memcpy(m_fileMappingAddress, &data, sizeof(data));
-    ReleaseSemaphore(m_semaphoreReadWrite, 1, NULL);
+    size_t previousNumberOfConsumers = data.numberOfConsumers;
+    *m_sharedData = data;
+    (*m_sharedData).numberOfConsumers = previousNumberOfConsumers;
     // notify consumers - increase the count by number of consumers
-    ReleaseSemaphore(m_semaphoreNewData, static_cast<int>(data.numberOfConsumers), NULL);
+    ReleaseSemaphore(m_semaphoreNewData, static_cast<int>(previousNumberOfConsumers), NULL);
     return true;
 }
 
 template <typename DataType, typename CallbackType>
-bool ConsumerObject<DataType, CallbackType>::open() {
-    // open actual data shared memory elements
-    m_fileMappingHandle = OpenFileMapping(
-        FILE_MAP_ALL_ACCESS,
-        FALSE,
-        m_memoryName.c_str());
+bool ConsumerObject<DataType, CallbackType>::open() 
+{
+    try {
+        m_sharedMemory = std::make_shared<managed_shared_memory>(open_only, m_sharedMemoryName.c_str());
+        if (m_sharedMemory != nullptr) {
+            return false;
+        }
 
-    if (m_fileMappingHandle == nullptr) {
-        return false;
+        auto result = m_sharedMemory->find<DataType>(m_sharedDataName.c_str());
+        if (result.first != nullptr) {
+            m_sharedData = result.first;
+        }
+        else {
+            return false;
+        }
+
+        m_semaphoreNewData = OpenSemaphore(SEMAPHORE_ALL_ACCESS, FALSE, m_semaphoreNewDataName.c_str());
+        if (m_semaphoreNewData == nullptr) {
+            return false;
+        }
     }
-
-    m_fileMappingAddress = MapViewOfFile(m_fileMappingHandle, FILE_MAP_ALL_ACCESS, 0, 0, 0);
-    if (m_fileMappingAddress == nullptr) {
-        return false;
-    }
-
-    m_semaphoreReadWrite = OpenSemaphore(SEMAPHORE_ALL_ACCESS, FALSE, m_semaphoreReadWriteName.c_str());
-    if (m_semaphoreReadWrite == nullptr) {
-        return false;
-    }
-
-    m_semaphoreNewData = OpenSemaphore(SEMAPHORE_ALL_ACCESS, FALSE, m_semaphoreNewDataName.c_str());
-    if (m_semaphoreNewData == nullptr) {
+    catch (const interprocess_exception& ex) {
+        std::cout << "consumer error: " << ex.what() << std::endl;
         return false;
     }
 
@@ -182,25 +213,19 @@ bool ConsumerObject<DataType, CallbackType>::open() {
 }
 
 template <typename DataType, typename CallbackType>
-bool ConsumerObject<DataType, CallbackType>::read() {
+bool ConsumerObject<DataType, CallbackType>::read() 
+{
     WaitForSingleObject(m_semaphoreNewData, INFINITE); // if count is already 0 -> wait. if count is more than 0 -> proceed and decrease
-    DataType data;
-    WaitForSingleObject(m_semaphoreReadWrite, INFINITE);
-    std::memcpy(&data, m_fileMappingAddress, sizeof(data));
-    ReleaseSemaphore(m_semaphoreReadWrite, 1, NULL);
+    DataType data = *m_sharedData;
     printTime();
     m_callback(data);
     return true;
 }
 
 template <typename DataType, typename CallbackType>
-void ConsumerObject<DataType, CallbackType>::registerCallback(CallbackType& callback) {
+void ConsumerObject<DataType, CallbackType>::registerCallback(CallbackType& callback) 
+{
     m_callback = callback;
-    DataType currentData;
-    WaitForSingleObject(m_semaphoreReadWrite, INFINITE);
-    std::memcpy(&currentData, m_fileMappingAddress, sizeof(currentData));
-    currentData.numberOfConsumers++;
-    std::cout << "Number of consumers: " << static_cast<int>(currentData.numberOfConsumers) << std::endl;
-    std::memcpy(m_fileMappingAddress, &currentData, sizeof(currentData));
-    ReleaseSemaphore(m_semaphoreReadWrite, 1, NULL);
+    (*m_sharedData).numberOfConsumers++;
+    std::cout << "Number of consumers: " << static_cast<int>((*m_sharedData).numberOfConsumers) << std::endl;
 }
